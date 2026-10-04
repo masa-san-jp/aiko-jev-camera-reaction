@@ -1,49 +1,68 @@
-# aiko-jev-camera-reaction
+# アイコがカメラに反応する
 
-カメラの前でした動きに、アイコが返すブラウザのページ。
+**これは Jev（TypeSafe AI）による判定の動作検証プロジェクトです。** 本番用途のプロダクトではなく、「ローカルで検出した数値データを渡したとき、Jevがどの程度安定してジェスチャーを判定できるか」を実際に動かして確かめるためのデモです。
 
-手を振ると、画面の同じ側の手で振り返す。顔を近づけると、近づき返す。首を傾げると、同じ向きに傾げる。
-判定は見ている人の機械の中だけで動き、カメラの映像は1フレームも外に出ない。
+iPad、スマートフォン、PCのブラウザで、カメラに映った動作にアイコが動画で応えます。手・顔のランドマーク検出（MediaPipe）は端末内だけで処理し、カメラ映像自体は外部に送りません。検出した顔の角度・距離は、どのジェスチャーかの判定のために **Jev** に送っています。Jevは画像・動画を直接扱えないため（テキスト/構造化データのみ対応）、この判定専用の数値データだけを渡しています。なお手振りの左右判定は、検証の過程でJevのChoice判定が左右非対称・不安定だったため、単純な座標計算に切り替えています（詳細は`functions/api/gesture.js`のコメント参照）。Jevを使っているのは首傾げ・覗き込みの判定のみです。
+
+デモは https://aiko-jev-camera-reaction.pages.dev で公開しています（Cloudflare Pages）。iPadでこのURLを開くだけで動きます。
+
+> 旧版は「Jev・外部推論APIを使わない」設計でしたが、2026-09-23の要望によりJev前提に作り直しました。当時の設計判断は [20260923-aiko-camera-reactions.md](20260923-aiko-camera-reactions.md) / [20260923-aiko-camera-implementation-plan.md](20260923-aiko-camera-implementation-plan.md) に記録として残しています（現状とは異なります）。
 
 ## 構成
 
-- `index.html` — ページ本体。判定と、どの動きがどの動画を鳴らすかの対応も、ここに書いてある
-- `assets/` — 待機の立ち絵1枚と、反応の動画（手振り左右・覗き込み・首傾げ左右）
-- `vendor/` — 手と顔の検出（wasm とモデル）。外から読み込まないように同梱している
-- `serve-https.py` — カメラは暗号化された接続でしか開かないので、そのための小さなサーバ
+- `src/`：フロントエンド（Vite静的サイト）。MediaPipeで手・顔を検出し、直近の軌跡を同一オリジンの`/api/gesture`へ問い合わせる
+- `functions/api/gesture.js`：Cloudflare Pages Function。Jev APIキーを隠す中継役。手振りは座標計算のみで即判定し、それ以外（首傾げ・覗き込み・それ以外）はJevのChoiceプリミティブに渡して判定結果を返す
 
-## 動かす
+フロントエンドと中継APIは同じCloudflare Pagesプロジェクトから同一オリジンで配信されるため、CORSも別ホストの管理も不要です。Jev APIキーはCloudflare Pagesの環境変数（シークレット）としてのみ存在し、ブラウザには一切渡りません。反応動画はCloudflare R2（Rangeリクエスト対応、Safari/iOSの動画再生に必須）から配信しています。
 
-この機械のブラウザから見るだけなら、これで足りる。
+## 開発
 
-```bash
-python3 -m http.server 8777
+必要なものはNode.js 20以上、ffmpeg、ffprobe、[wrangler](https://developers.cloudflare.com/workers/wrangler/)（`npm i -g wrangler` または `npx wrangler`）です。
+
+反応動画の元ソース（`wave-left.MP4` など5本、人物が映っているため非公開）とダウンロード済みモデルは`.gitignore`対象でこのリポジトリに含まれません。`npm run assets:prepare`を動かすには、プロジェクトルートに自分で5本の素材（`wave-left.MP4` / `wave-right.MP4` / `look-into.MP4` / `tilt-to-left.MP4` / `tilt-to-right.mov`）を用意してください。見た目だけ動かしたい場合は、この手順を飛ばして`npm run models:prepare`だけ実行し、R2上の動画（本番と同じ`MEDIA_BASE_URL`）を使う形でも確認できます。
+
+```sh
+npm install
+npm run assets:prepare   # 自分の素材を用意した場合のみ
+npm run models:prepare
+npm run build
 ```
 
-別の端末から見るときは暗号化された接続が要る。証明書を作ってから、サーバを起こす。
+ローカルで`/api/gesture`を含めて確認する場合：
 
-```bash
-openssl req -x509 -newkey rsa:2048 -nodes -keyout self.key -out self.crt -days 365 \
-  -subj "/CN=<この機械のホスト名>" -addext "subjectAltName=DNS:<ホスト名>,IP:<tailnet の IP>"
-python3 serve-https.py
+```sh
+cp .dev.vars.example .dev.vars   # TYPESAFE_API_KEY を設定
+wrangler pages dev dist --port 8788
 ```
 
-証明書と鍵は共有しない。`.gitignore` に入れてある。
+フロントエンドの見た目だけ素早く確認したい場合は `npm run dev`（Vite）でも起動できますが、その場合 `/api/gesture` は応答しません（`wrangler pages dev` 経由でのみ動きます）。
 
-## 決まりごと
+カメラを使うにはHTTPS、またはlocalhostで開いてください。iPadから直接ローカルを開く場合、`localhost` はiPad自身を指すため使えません。デプロイ済みのCloudflare Pages URL（上記）を開いてください。動画だけを見る場合は初期画面の「動きを見る」を使えます。
 
-反応は3つの部品でできている。起きたかどうかを決める規則、動画1本、そしてどの規則がどの動画を
-鳴らすかの対応1行。動画はどれも待機の立ち絵と同じ姿勢で始まり、同じ姿勢で終わる。だから間に
-何も挟まずに繋がる。
+## 検証
 
-設計の全文（反応の足し方、動画を作るときの設定、左右の扱い、まだ無いもの）は別の文書にある。
+```sh
+npm run typecheck
+npm test
+npm run build
+npm run test:smoke
+```
 
-## 判定の仕組みと成立
+現在の自動検証は、キャリブレーションの状態遷移とJevへ渡すスナップショット（手の軌跡・顔の角度）の組み立て、ビルド後の配信アセットを確認します。ジェスチャーの最終判定自体はJev側で行うため、閾値の単体テストはありません。実機カメラ、GPU、権限、Safariの動画再生制限、Jevとの疎通は自動テストの代わりにならないため、[docs/device-validation.md](docs/device-validation.md) に機種ごとに記録します。
 
-[ページ本体](index.html)はMediaPipe Tasks Visionの手・顔検出をブラウザ内で実行し、検出結果から既存動画を選びます。手振りは短い時間窓における手首の横方向の往復で判定し、一度横切っただけの動作を避けます。動画の再生中は別の反応に割り込ませず、終了してから待機姿勢へ戻します。生成AIが毎フレーム動画を作る仕組みではありません。
+## 配信（Cloudflare Pages）
 
-[2026年9月22日の初期コミット](https://github.com/masa-san-jp/aiko-jev-camera-reaction/commit/dfab86b1888a1e0b4056f1129dca0df757520d7c)に、手振り・覗き込み・首傾げとローカル判定の構成が収録されています。コード内の同日の検証メモでは、鏡像表示と検出ラベルで左右が逆転したため、画面上の手首位置で左右を決める方式を採ったことが説明されています。
+```sh
+npm run build
+wrangler pages secret put TYPESAFE_API_KEY --project-name aiko-jev-camera-reaction   # 初回のみ
+wrangler pages deploy dist --project-name aiko-jev-camera-reaction --branch main
+```
 
-## 反応を増やすには
+公開前に次を確認します。
 
-現在の構成は、カメラに向けた動きを返す小さな対話表現の試作として利用できます。新しい反応を足す場合は、判定規則・待機姿勢に戻る動画・対応表を一組で追加し、誤検出と再生終了時のつながりを確認します。音声対話や新しい動作の自動学習を備えるという意味ではありません。別端末での利用には、ブラウザが信頼するHTTPSとカメラ権限が必要です。
+- `/models/` のWASMと2つのモデルが同じ配信元から読める
+- R2上の5本のMP4がH.264、音声なし、範囲リクエスト（206 Partial Content）対応で読める
+- `typesafe.env.rtf`、`.dev.vars`、元動画、モデル準備用ファイルが配信物（`dist/`）にもリポジトリにも入っていない
+- ブラウザから`/api/gesture`とR2以外にカメラ画像やランドマークが送られていない（`/api/gesture`へは手の軌跡・顔の角度の数値のみ、Jev APIキーはCloudflare Pages側にのみ存在）
+
+iPadでの自動反応の実機確認結果は、機種・iPadOS・Safari・ビルドとあわせて[docs/device-validation.md](docs/device-validation.md)に記録してください。

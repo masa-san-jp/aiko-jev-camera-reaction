@@ -1,4 +1,16 @@
-self.crt
-self.key
-ts.crt
-ts.key
+node_modules/
+dist/
+.vite/
+typesafe.env.rtf
+*.local
+*.tsbuildinfo
+.dev.vars
+.wrangler/
+
+# Raw source footage (someone's face/likeness) and generated/downloaded binaries —
+# regenerable via `npm run assets:prepare` / `npm run models:prepare`, not meant to be
+# published publicly as part of this repo.
+*.MP4
+*.mov
+public/media/
+public/models/

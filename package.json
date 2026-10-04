@@ -1,0 +1,23 @@
+{
+  "name": "aiko-camera-reactions",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "assets:prepare": "node scripts/prepare-assets.mjs",
+    "models:prepare": "node scripts/prepare-models.mjs",
+    "test:smoke": "node scripts/smoke-dist.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vite": "7.1.5",
+    "vitest": "3.2.4"
+  }
+}

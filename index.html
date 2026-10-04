@@ -1,203 +1,28 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>アイコに手を振る</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light; }
-  body { margin:0; background:#f6f1e7; color:#3a332b;
-         font-family:system-ui,-apple-system,"Hiragino Sans",sans-serif; }
-  .wrap { display:flex; flex-direction:column; align-items:center; gap:12px; padding:12px; }
-  .stage { position:relative; width:min(92vw,460px); aspect-ratio:3/4;
-           border-radius:14px; overflow:hidden; background:#efe7d8; }
-  .stage img, .stage video { position:absolute; inset:0; width:100%; height:100%;
-               object-fit:cover; opacity:0; transition:opacity .12s linear; }
-  .stage img.on, .stage video.on { opacity:1; }
-  video { width:min(46vw,200px); border-radius:10px; transform:scaleX(-1); background:#000; }
-  .state { font-size:14px; min-height:1.4em; }
-  button { font-size:16px; padding:10px 18px; border-radius:10px; border:1px solid #c9bda6;
-           background:#fffdf8; }
-</style>
-<div class="wrap">
-  <div class="stage">
-    <img id="idle" src="assets/idle.png" class="on" alt="">
-    <video id="waveL" src="assets/wave-r.mp4" muted playsinline preload="auto"></video>
-    <video id="waveR" src="assets/wave-l.mp4" muted playsinline preload="auto"></video>
-    <video id="peek" src="assets/peek.mp4" muted playsinline preload="auto"></video>
-    <video id="tiltL" src="assets/tilt-left.mp4" muted playsinline preload="auto"></video>
-    <video id="tiltR" src="assets/tilt-right.mp4" muted playsinline preload="auto"></video>
-  </div>
-  <div class="state" id="state">カメラを許可すると始まります</div>
-  <button id="start">はじめる</button>
-  <video id="cam" playsinline muted></video>
-</div>
-
-<script type="module">
-import { FilesetResolver, HandLandmarker, FaceDetector }
-  from "./vendor/tasks-vision/vision_bundle.mjs";
-
-const cam = document.getElementById("cam");
-const stateEl = document.getElementById("state");
-const frames = {
-  idle: document.getElementById("idle"),
-  left: document.getElementById("waveL"),
-  right: document.getElementById("waveR"),
-  peek: document.getElementById("peek"),
-  tiltL: document.getElementById("tiltL"),
-  tiltR: document.getElementById("tiltR"),
-};
-
-function show(which) {
-  for (const [k, el] of Object.entries(frames)) el.classList.toggle("on", k === which);
-}
-
-// 動画は最後まで流しきる。途中で別の判定が来ても差し替えない——
-// 手を振り終える前に戻ると、腕が上がったまま消える。
-let playing = null;
-function playWave(side) {
-  if (playing) return;
-  const v = frames[side];
-  playing = side;
-  show(side);
-  v.currentTime = 0;
-  const done = () => { v.removeEventListener("ended", done); playing = null; show("idle"); };
-  v.addEventListener("ended", done);
-  v.play().catch(() => done());
-}
-
-// 手首の横位置を短い窓で覚えておき、往復の回数で「振っている」を決める。
-// 1回横切っただけでは振ったことにしない——物を取る動きが全部手振りになるため。
-const WINDOW_MS = 1200, MIN_SWINGS = 3, MIN_AMPLITUDE = 0.045;
-const history = { left: [], right: [] };
-
-function countSwings(samples) {
-  if (samples.length < 6) return 0;
-  const xs = samples.map(s => s.x);
-  const lo = Math.min(...xs), hi = Math.max(...xs);
-  if (hi - lo < MIN_AMPLITUDE) return 0;          // 揺れが小さいものは静止とみなす
-  const mid = (lo + hi) / 2;
-  let swings = 0, side = xs[0] > mid;
-  for (const x of xs) {
-    const s = x > mid;
-    if (s !== side) { swings++; side = s; }
-  }
-  return swings;
-}
-
-function onResults(res, now) {
-  // 左右は検出側のラベルを使わない。あのラベルは「入力が鏡像かどうか」で意味が
-  // 変わるので、表示を反転しているこの画面では取り違えやすい（2026-09-22 実測で
-  // 逆の手が上がった）。手首が画面のどちら側に映っているかだけで決める。
-  const seen = new Set();
-  (res.landmarks || []).forEach((lm, i) => {
-    const wrist = lm?.[0];
-    if (!wrist) return;
-    if (wrist.y > 0.85) return;                 // 画面の下に垂れている手は数えない
-    // 表示は scaleX(-1) で反転している。取り込んだ座標の x をそのまま反転すれば、
-    // マサくんが見ている画面の中での位置になる。
-    const screenX = 1 - wrist.x;
-    const side = screenX < 0.5 ? "left" : "right";
-    seen.add(side);
-    const arr = history[side] || (history[side] = []);
-    arr.push({ t: now, x: screenX });
-    while (arr.length && now - arr[0].t > WINDOW_MS) arr.shift();
-    if (countSwings(arr) >= MIN_SWINGS) {
-      playWave(side);                           // 画面の同じ側の手をアイコが上げる＝鏡
-      arr.length = 0;
-    }
-  });
-  for (const k of Object.keys(history)) if (!seen.has(k)) history[k].length = 0;
-}
-
-// 覗き込みは「顔が普段よりどれだけ大きいか」で決める。人によって座る距離が違うので、
-// 絶対の大きさでは判定できない。最初の数秒で普段の大きさを測って、そこからの倍率で見る。
-const PEEK_RATIO = 1.35, PEEK_HOLD_MS = 600, PEEK_COOLDOWN_MS = 4000;
-let faceBaseline = null, faceSamples = [], peekSince = 0, lastPeek = 0;
-
-// 首の傾きは両目を結んだ線の角度で測る。顔の大きさと同じ検出から取れる。
-const TILT_DEG = 12, TILT_HOLD_MS = 600, TILT_COOLDOWN_MS = 4000;
-let tiltSince = 0, tiltSide = null, lastTilt = 0;
-
-function onTilt(d, now) {
-  const k = d.keypoints;
-  if (!k || k.length < 2) return;
-  // keypoints[0] と [1] は両目。取り込んだ座標なので、画面では左右が反転している。
-  const dx = k[1].x - k[0].x, dy = k[1].y - k[0].y;
-  const deg = Math.atan2(dy, dx) * 180 / Math.PI;
-  if (Math.abs(deg) < TILT_DEG) { tiltSince = 0; tiltSide = null; return; }
-  // 頭の傾きも鏡で返す。画面に映ったのと同じ向きへアイコが傾く。
-  // 符号の向きは実機で確かめて決めた（2026-09-22、逆に出たのでここで入れ替えた）。
-  // 両目のキーポイントの並び順が想定と逆だったため、角度の符号だけでは決まらない。
-  const side = deg > 0 ? "tiltR" : "tiltL";
-  if (tiltSide !== side) { tiltSide = side; tiltSince = now; return; }
-  if (now - tiltSince > TILT_HOLD_MS && now - lastTilt > TILT_COOLDOWN_MS) {
-    lastTilt = now; tiltSince = 0; playWave(side);
-  }
-}
-
-function onFace(res, now) {
-  // 拾うのは、確かに顔で、画面にそれなりの大きさで写っているものだけ。
-  // 小さく弱い検出で反応すると、誰も居ない画面や模様に反応して勝手に動く。
-  const d = (res.detections || []).find(x =>
-    (x.categories?.[0]?.score ?? 1) >= 0.7 &&
-    x.boundingBox.height / (cam.videoHeight || 480) >= 0.12);
-  if (!d) { peekSince = 0; tiltSince = 0; tiltSide = null; return; }
-  onTilt(d, now);
-  const h = d.boundingBox.height / (cam.videoHeight || 480);
-  if (faceBaseline === null) {                 // 起動直後の数秒を普段の距離として覚える
-    faceSamples.push(h);
-    if (faceSamples.length >= 40) {
-      faceSamples.sort((a, b) => a - b);
-      faceBaseline = faceSamples[Math.floor(faceSamples.length / 2)];
-    }
-    return;
-  }
-  if (h >= faceBaseline * PEEK_RATIO) {
-    if (!peekSince) peekSince = now;           // 一瞬の揺れで出さない。少し続いたら覗き込み
-    else if (now - peekSince > PEEK_HOLD_MS && now - lastPeek > PEEK_COOLDOWN_MS) {
-      lastPeek = now; peekSince = 0; playWave("peek");
-    }
-  } else {
-    peekSince = 0;
-  }
-}
-
-let landmarker = null, facer = null;
-
-async function start() {
-  document.getElementById("start").remove();
-  stateEl.textContent = "カメラを準備しています";
-  const stream = await navigator.mediaDevices.getUserMedia(
-    { video: { facingMode: "user", width: 640, height: 480 }, audio: false });
-  cam.srcObject = stream;
-  await cam.play();
-
-  const files = await FilesetResolver.forVisionTasks("./vendor/tasks-vision/wasm");
-  landmarker = await HandLandmarker.createFromOptions(files, {
-    baseOptions: { modelAssetPath: "./vendor/models/hand_landmarker.task" },
-    numHands: 2,
-    runningMode: "VIDEO",
-  });
-
-  facer = await FaceDetector.createFromOptions(files, {
-    baseOptions: { modelAssetPath: "./vendor/models/blaze_face_short_range.tflite" },
-    runningMode: "VIDEO",
-  });
-
-  stateEl.textContent = "カメラに向かって手を振るか、顔を近づけてみて";
-  let last = -1;
-  const loop = () => {
-    const now = performance.now();
-    if (cam.currentTime !== last) {
-      last = cam.currentTime;
-      try { onResults(landmarker.detectForVideo(cam, now), now); } catch (_) {}
-      try { onFace(facer.detectForVideo(cam, now), now); } catch (_) {}
-    }
-    requestAnimationFrame(loop);
-  };
-  loop();
-}
-
-document.getElementById("start").addEventListener("click", () => {
-  start().catch(err => { stateEl.textContent = "カメラを開けませんでした: " + err.message; });
-});
-</script>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f4ef" />
+    <meta name="description" content="カメラの動きにアイコが反応するデモ" />
+    <title>アイコがカメラに反応する</title>
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <noscript>
+        <div class="noscript-card">
+          <h1>アイコの動画</h1>
+          <p>自動反応にはJavaScriptが必要です。動画は下のリンクから再生できます。</p>
+          <ul>
+            <li><a href="https://pub-5dd3075dfa684d448014cb659e2ca870.r2.dev/wave-left.mp4">手を振る（左）</a></li>
+            <li><a href="https://pub-5dd3075dfa684d448014cb659e2ca870.r2.dev/wave-right.mp4">手を振る（右）</a></li>
+            <li><a href="https://pub-5dd3075dfa684d448014cb659e2ca870.r2.dev/look-into.mp4">覗き込む</a></li>
+            <li><a href="https://pub-5dd3075dfa684d448014cb659e2ca870.r2.dev/tilt-left.mp4">首を傾げる（左）</a></li>
+            <li><a href="https://pub-5dd3075dfa684d448014cb659e2ca870.r2.dev/tilt-right.mp4">首を傾げる（右）</a></li>
+          </ul>
+        </div>
+      </noscript>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
