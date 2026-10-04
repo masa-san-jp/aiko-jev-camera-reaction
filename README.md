@@ -8,6 +8,26 @@ iPad、スマートフォン、PCのブラウザで、カメラに映った動�
 
 > 旧版は「Jev・外部推論APIを使わない」設計でしたが、2026-09-23の要望によりJev前提に作り直しました。当時の設計判断は [20260923-aiko-camera-reactions.md](20260923-aiko-camera-reactions.md) / [20260923-aiko-camera-implementation-plan.md](20260923-aiko-camera-implementation-plan.md) に記録として残しています（現状とは異なります）。
 
+## 画面
+
+待機画面はこれだけです。「はじめる」でカメラ許可、「動きを見る」でカメラなしの手動プレビューが開きます。カメラ映像自体は画面に表示しません（検出用に裏で使うだけ）。
+
+<img src="docs/screenshots/idle.jpg" alt="待機画面：アイコの立ち絵と「はじめる」「動きを見る」ボタン" width="360">
+
+## 動作パターン
+
+カメラの前での動きと、それに対するアイコの反応動画の対応です。判定条件は`functions/api/gesture.js`の`REACTION_CRITERIA`に対応します。
+
+| 動き | 条件 | 反応 | 判定方法 |
+| --- | --- | --- | --- |
+| <img src="docs/screenshots/wave-left.jpg" width="120"><br>手を振る（画面向かって左） | 手首が画面左寄りで検出される | `wave-left.mp4` | 座標計算（Jevは使わない） |
+| <img src="docs/screenshots/wave-right.jpg" width="120"><br>手を振る（画面向かって右） | 手首が画面右寄りで検出される | `wave-right.mp4` | 座標計算（Jevは使わない） |
+| <img src="docs/screenshots/tilt-left.jpg" width="120"><br>首を傾げる（画面向かって左） | 両目を結ぶ線の角度がはっきり傾く | `tilt-left.mp4` | Jev（Choice）＋角度の符号で左右決定 |
+| <img src="docs/screenshots/tilt-right.jpg" width="120"><br>首を傾げる（画面向かって右） | 両目を結ぶ線の角度が逆向きにはっきり傾く | `tilt-right.mp4` | Jev（Choice）＋角度の符号で左右決定 |
+| <img src="docs/screenshots/look-into.jpg" width="120"><br>覗き込む | 顔が普段よりはっきり大きく映る（接近） | `look-into.mp4` | Jev（Choice） |
+
+手振りの左右は、検証の過程でJevのChoice判定が左右非対称・不安定だったため座標計算に切り替えています。首傾げ・覗き込みの「種類の判定」（ノイズか意図的な動きか）はJevに任せ、左右の向きだけ角度の符号で機械的に決めています（経緯は上の説明文、実装は`functions/api/gesture.js`のコメント参照）。
+
 ## 構成
 
 - `src/`：フロントエンド（Vite静的サイト）。MediaPipeで手・顔を検出し、直近の軌跡を同一オリジンの`/api/gesture`へ問い合わせる
