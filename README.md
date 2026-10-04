@@ -4,7 +4,7 @@
 
 iPad、スマートフォン、PCのブラウザで、カメラに映った動作にアイコが動画で応えます。手・顔のランドマーク検出（MediaPipe）は端末内だけで処理し、カメラ映像自体は外部に送りません。検出した顔の角度・距離は、どのジェスチャーかの判定のために **Jev** に送っています。Jevは画像・動画を直接扱えないため（テキスト/構造化データのみ対応）、この判定専用の数値データだけを渡しています。なお手振りの左右判定は、検証の過程でJevのChoice判定が左右非対称・不安定だったため、単純な座標計算に切り替えています（詳細は`functions/api/gesture.js`のコメント参照）。Jevを使っているのは首傾げ・覗き込みの判定のみです。
 
-デモは https://aiko-jev-camera-reaction.pages.dev で公開しています（Cloudflare Pages）。iPadでこのURLを開くだけで動きます。
+検証用に立てていたCloudflare Pages/R2のデモ環境は役目を終えたため削除済みです。現在このリポジトリに公開中のライブデモURLはありません。動かし方は下記「開発」「配信」を参照してください。
 
 > 旧版は「Jev・外部推論APIを使わない」設計でしたが、2026-09-23の要望によりJev前提に作り直しました。当時の設計判断は [20260923-aiko-camera-reactions.md](20260923-aiko-camera-reactions.md) / [20260923-aiko-camera-implementation-plan.md](20260923-aiko-camera-implementation-plan.md) に記録として残しています（現状とは異なります）。
 
@@ -37,7 +37,7 @@ wrangler pages dev dist --port 8788
 
 フロントエンドの見た目だけ素早く確認したい場合は `npm run dev`（Vite）でも起動できますが、その場合 `/api/gesture` は応答しません（`wrangler pages dev` 経由でのみ動きます）。
 
-カメラを使うにはHTTPS、またはlocalhostで開いてください。iPadから直接ローカルを開く場合、`localhost` はiPad自身を指すため使えません。デプロイ済みのCloudflare Pages URL（上記）を開いてください。動画だけを見る場合は初期画面の「動きを見る」を使えます。
+カメラを使うにはHTTPS、またはlocalhostで開いてください。iPadから直接ローカルを開く場合、`localhost` はiPad自身を指すため使えません。実機で試すには「配信」の手順で自分のCloudflareアカウントにデプロイしてください。動画だけを見る場合は初期画面の「動きを見る」を使えます。
 
 ## 検証
 
